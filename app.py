@@ -40,7 +40,27 @@ with st.sidebar:
     st.divider()
     st.info("☁️ **Cloud Mode Tip:** Upload your previous 'Master History' file below to maintain trend continuity.")
     uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
-
+# ... existing sidebar code ...
+    uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
+    
+    # --- NEW: QUOTA TRACKER ---
+    st.divider()
+    st.subheader("📊 Session Quota Tracker")
+    
+    # Initialize session state for tracking if not exists
+    if 'api_calls' not in st.session_state:
+        st.session_state['api_calls'] = 0
+        
+    # Display the counter
+    st.metric(label="API Calls This Session", value=st.session_state['api_calls'])
+    
+    st.caption("""
+    **Note:** This counts calls made *now*.
+    - **Gemini 1.5 Flash:** ~15 requests/min, 1,500/day.
+    - **Gemini 2.5 Flash:** ~15 requests/min, 20-50/day (Free Tier).
+    """)
+    
+    st.link_button("Check Official Google Quota Page", "https://aistudio.google.com/app/plan_information")
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
@@ -295,3 +315,4 @@ if df is not None:
                 
             with t3:
                 st.dataframe(stats)
+
