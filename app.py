@@ -178,27 +178,22 @@ if df is not None:
         st.divider()
         if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
             
-            # --- MODEL INIT ---
+            # --- MODEL SELECTION (STRICT 2.5 ONLY) ---
             genai.configure(api_key=api_key)
-            model = 'gemini-2.5-flash'
             
-            # Robust Model Selection
-            model_options = ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-pro']
-            
-            with st.spinner("Connecting to AI..."):
-                for m_name in model_options:
-                    try:
-                        test_model = genai.GenerativeModel(m_name)
-                        test_model.generate_content("test")
-                        model = test_model
-                        st.toast(f"Connected to {m_name}", icon="✅")
-                        break
-                    except:
-                        continue
-            
-            if not model:
-                st.error("❌ Could not connect to any Gemini model. Check your API Key or Quota.")
-                st.stop()
+            with st.spinner("Connecting to Gemini 2.5 Flash..."):
+                try:
+                    # strictly select 2.5 flash
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    # Test connection immediately
+                    model.generate_content("test")
+                    st.toast("Connected to Gemini 2.5 Flash", icon="✅")
+                    
+                except Exception as e:
+                    st.error(f"❌ Failed to connect to Gemini 2.5 Flash. Error: {e}")
+                    st.stop()
+            # -----------------------------------------
 
             # --- PROCESS ---
             with st.status("Processing Data...", expanded=True) as status:
@@ -267,4 +262,5 @@ if df is not None:
                 
             with t3:
                 st.dataframe(stats)
+
 
