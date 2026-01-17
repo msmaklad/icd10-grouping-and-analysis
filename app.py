@@ -180,7 +180,7 @@ if df is not None:
             
             # --- MODEL INIT ---
             genai.configure(api_key=api_key)
-            model = None
+            model = 'gemini-2.5-flash'
             
             # Robust Model Selection
             model_options = ['gemini-2.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-pro']
@@ -267,3 +267,4 @@ if df is not None:
                 
             with t3:
                 st.dataframe(stats)
+
