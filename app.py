@@ -22,7 +22,6 @@ with st.sidebar:
     st.header("⚙️ Configuration")
     
     st.subheader("🔑 API Keys (Rotation)")
-    # FIXED: Removed 'type="password"' because st.text_area does not support it.
     api_keys_input = st.text_area(
         "Enter Google Gemini API Keys (One per line)", 
         height=150,
@@ -40,27 +39,20 @@ with st.sidebar:
     st.divider()
     st.info("☁️ **Cloud Mode Tip:** Upload your previous 'Master History' file below to maintain trend continuity.")
     uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
-# ... existing sidebar code ...
-    uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
-    
-    # --- NEW: QUOTA TRACKER ---
+
+    # --- QUOTA TRACKER ---
     st.divider()
     st.subheader("📊 Session Quota Tracker")
-    
-    # Initialize session state for tracking if not exists
     if 'api_calls' not in st.session_state:
         st.session_state['api_calls'] = 0
-        
-    # Display the counter
-    st.metric(label="API Calls This Session", value=st.session_state['api_calls'])
     
-    st.caption("""
-    **Note:** This counts calls made *now*.
-    - **Gemini 1.5 Flash:** ~15 requests/min, 1,500/day.
-    - **Gemini 2.5 Flash:** ~15 requests/min, 20-50/day (Free Tier).
-    """)
+    # We use a placeholder so we can update it from the function later
+    quota_placeholder = st.empty()
+    quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
     
-    st.link_button("Check Official Google Quota Page", "https://aistudio.google.com/app/plan_information")
+    st.caption("Gemini 2.5 Free Tier Limit: ~15 requests/min")
+
+
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
@@ -82,11 +74,12 @@ def get_icd_mapping_with_rotation(keys_list, unique_diagnoses):
     Advanced AI processing with:
     1. Batch Size = 150 (Efficiency)
     2. Auto Key Rotation (Reliability)
+    3. Live Quota Tracking
     """
     mapping_dict = {}
     
     # --- CONFIGURATION ---
-    batch_size = 150  # Process 150 items per call to maximize quota usage
+    batch_size = 150 
     current_key_idx = 0
     
     # Initialize first key
@@ -99,57 +92,50 @@ def get_icd_mapping_with_rotation(keys_list, unique_diagnoses):
     batches = [unique_diagnoses[i:i + batch_size] for i in range(0, len(unique_diagnoses), batch_size)]
     
     for i, batch in enumerate(batches):
-        
-        # Retry loop for key rotation
-        max_retries = len(keys_list) + 1 # Try all keys at least once
-        success = False
+        max_retries = len(keys_list) + 1 
         
         for attempt in range(max_retries):
             prompt = f"""
             Act as a Medical Coder. Map these diagnosis strings to ICD-10.
             Return a JSON object where keys are the original text, and values contain "Level2" (Block) and "Level3" (Category).
             NO markdown formatting. NO intro text. JUST JSON.
-            
-            List:
-            {json.dumps(batch)}
+            List: {json.dumps(batch)}
             """
             
             try:
                 response = model.generate_content(prompt)
-                batch_data = extract_json_from_text(response.text)
                 
+                # --- UPDATE TRACKER ---
+                st.session_state['api_calls'] += 1
+                quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
+                # ----------------------
+
+                batch_data = extract_json_from_text(response.text)
                 if batch_data:
                     mapping_dict.update(batch_data)
-                else:
-                    st.warning(f"Batch {i+1} returned invalid JSON. AI Output: {response.text[:50]}...")
                 
-                success = True
-                time.sleep(2) # Short pause for politeness
-                break # Break retry loop, move to next batch
+                time.sleep(2) # Politeness delay
+                break # Success, move to next batch
                 
             except Exception as e:
                 error_msg = str(e)
-                # Check for Quota Limit (429)
                 if "429" in error_msg or "Quota" in error_msg:
-                    # ROTATE KEY
+                    # ROTATION LOGIC
                     old_key = current_key_idx
                     current_key_idx = (current_key_idx + 1) % len(keys_list)
                     
-                    # Prevent infinite loop if ALL keys are dead
                     if current_key_idx == 0 and attempt > 0:
-                        st.error("❌ CRITICAL: All provided API keys have hit their quota limits. Please add more keys or wait.")
+                        st.error("❌ CRITICAL: All API keys have hit their quota limits.")
                         st.stop()
                         
-                    st.toast(f"Quota hit on Key #{old_key+1}. Switching to Key #{current_key_idx+1}...", icon="🔄")
-                    
-                    # Re-configure with new key
+                    st.toast(f"Quota hit! Switching to Key #{current_key_idx+1}...", icon="🔄")
                     genai.configure(api_key=keys_list[current_key_idx])
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     time.sleep(1)
-                    continue # Retry the same batch with new key
+                    continue 
                 else:
                     st.error(f"API Error on batch {i+1}: {e}")
-                    break # Fatal error, stop trying this batch
+                    break 
 
         progress_bar.progress((i + 1) / total_batches, text=f"Mapping batch {i+1}/{total_batches}")
             
@@ -168,8 +154,7 @@ def update_master_history(current_stats_df, dept, month, existing_history_df=Non
     return combined_df
 
 def generate_strategic_report(history_df, current_month, dept, keys_list):
-    """Generates report using a working key."""
-    # Just use the first key, if it fails, the user can re-run since mapping is done
+    """Generates report using the first available key."""
     genai.configure(api_key=keys_list[0]) 
     model = genai.GenerativeModel('gemini-2.5-flash')
     
@@ -262,7 +247,6 @@ if df is not None:
                 st.write(f"🧠 AI Mapping Diagnoses (Using {len(api_keys)} API Keys)...")
                 unique = wdf['DIAG'].unique().tolist()
                 
-                # CALL THE NEW ROTATION FUNCTION
                 mapping = get_icd_mapping_with_rotation(api_keys, unique)
                 
                 if not mapping:
@@ -315,4 +299,3 @@ if df is not None:
                 
             with t3:
                 st.dataframe(stats)
-
