@@ -39,6 +39,11 @@ with st.sidebar:
     if 'api_calls' not in st.session_state: st.session_state['api_calls'] = 0
     quota_placeholder = st.empty()
     quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
+    
+    # RESET BUTTON (SIDEBAR)
+    st.divider()
+    if st.button("🔄 Reset App State", use_container_width=True):
+        st.rerun()
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -172,6 +177,12 @@ def generate_report(history_df, month, dept, keys):
 # MAIN APP - WORKFLOW ENFORCEMENT
 # ==========================================
 
+# Initialize session state for analysis results
+if 'analysis_done' not in st.session_state:
+    st.session_state['analysis_done'] = False
+if 'zip_buffer' not in st.session_state:
+    st.session_state['zip_buffer'] = None
+
 # STEP 1: MANDATORY HISTORY LOAD
 st.subheader("1. Initialize History (Mandatory)")
 st.info("To generate comparative trends, you must load the Master History file first.")
@@ -252,48 +263,57 @@ if uploaded_file and api_keys:
                 st.write("📝 Generating Strategic Report...")
                 report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
                 
-                # AUDIT EXCEL
+                # ZIP CREATION
+                st.write("📦 Packaging Files...")
                 audit_buffer = BytesIO()
                 wdf.to_excel(audit_buffer, index=False)
                 
-                # ZIP CREATION
-                st.write("📦 Packaging Files...")
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    # 1. Add Master History (Required)
                     zf.writestr("master_history.csv", full_hist.to_csv(index=False))
-                    
-                    # 2. Add Word Report (If success)
                     if report_doc:
                         zf.writestr(f"Report_{dept_name}_{data_month}.docx", report_doc.getvalue())
-                        
-                    # 3. Add Audit Excel
                     zf.writestr(f"Audit_{dept_name}_{data_month}.xlsx", audit_buffer.getvalue())
                     
                 zip_buffer.seek(0)
                 
+                # SAVE TO SESSION STATE
+                st.session_state['zip_buffer'] = zip_buffer
+                st.session_state['analysis_done'] = True
+                st.session_state['full_hist'] = full_hist
+                
             st.success("Analysis Complete!")
-            
-            # --- SINGLE DOWNLOAD BUTTON ---
-            st.divider()
-            st.warning("⬇️ **CLICK BELOW TO DOWNLOAD EVERYTHING (History + Report + Audit)**")
-            
-            st.download_button(
-                label="📦 DOWNLOAD ALL FILES (ZIP)",
-                data=zip_buffer,
-                file_name=f"Hospital_Analysis_{dept_name}_{data_month}.zip",
-                mime="application/zip",
-                type="primary",
-                use_container_width=True
-            )
-            
-            if report_error:
-                st.error(f"⚠️ Note: Word Report failed to generate. Error: {report_error}")
-
-            # Preview
-            st.divider()
-            st.write("📊 **History Preview:**")
-            st.dataframe(full_hist.tail(10))
+            st.rerun()
 
     except Exception as e:
         st.error(f"Critical App Error: {e}")
+
+# RESULTS DISPLAY (PERSISTENT AFTER RERUN)
+if st.session_state.get('analysis_done') and st.session_state.get('zip_buffer'):
+    st.divider()
+    st.subheader("✅ Results Ready")
+    st.warning("⬇️ **STEP 4: Download Your Files**")
+    
+    st.download_button(
+        label="📦 DOWNLOAD ALL FILES (ZIP)",
+        data=st.session_state['zip_buffer'],
+        file_name=f"Hospital_Analysis_{dept_name}_{data_month}.zip",
+        mime="application/zip",
+        type="primary",
+        use_container_width=True
+    )
+    
+    # RESET BUTTON
+    st.divider()
+    col_reset, _ = st.columns([1,3])
+    with col_reset:
+        if st.button("🔄 Start New Analysis (Reset Page)", type="secondary"):
+            # Clear all session state keys
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+    st.divider()
+    if 'full_hist' in st.session_state:
+        st.write("📊 **History Preview:**")
+        st.dataframe(st.session_state['full_hist'].tail(10))
