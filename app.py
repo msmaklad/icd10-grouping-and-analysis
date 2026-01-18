@@ -4,6 +4,7 @@ import google.generativeai as genai
 import json
 import time
 import os
+import zipfile
 from docx import Document
 from io import BytesIO
 
@@ -125,7 +126,6 @@ def update_master_history(current_stats, dept, month, old_hist=None):
     current_stats['Department'] = dept
     current_stats['Month'] = month
     if old_hist is not None and not old_hist.empty:
-        # Remove if duplicate exists to prevent double counting
         old_hist = old_hist[~((old_hist['Department'] == dept) & (old_hist['Month'] == month))]
         return pd.concat([old_hist, current_stats], ignore_index=True)
     return current_stats
@@ -178,7 +178,7 @@ st.info("To generate comparative trends, you must load the Master History file f
 
 history_mode = st.radio("Do you have an existing Master History file?", ["Yes, I have it", "No, this is Day 1 (Start Fresh)"], horizontal=True)
 
-history_df = pd.DataFrame() # Default empty
+history_df = pd.DataFrame() 
 
 if history_mode == "Yes, I have it":
     uploaded_history = st.file_uploader("📂 Upload 'master_history.csv'", type=['csv'], key="hist_up")
@@ -190,13 +190,13 @@ if history_mode == "Yes, I have it":
             st.error("Invalid CSV file.")
     else:
         st.warning("⚠️ You must upload the history file to proceed.")
-        st.stop() # STOP HERE until file is uploaded
+        st.stop()
 else:
     st.success("✅ Starting with a fresh history database.")
 
 st.divider()
 
-# STEP 2: DATA UPLOAD (Only visible if Step 1 passed)
+# STEP 2: DATA UPLOAD
 st.subheader("2. Upload Current Month Data")
 uploaded_file = st.file_uploader("Upload Raw Hospital Data (CSV/Excel)", type=['csv', 'xlsx'], key="data_up")
 
@@ -252,48 +252,48 @@ if uploaded_file and api_keys:
                 st.write("📝 Generating Strategic Report...")
                 report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
                 
-            st.success("Analysis Complete!")
-            
-            # --- CRITICAL SAVE REMINDER ---
-            st.divider()
-            st.warning("""
-            ⚠️ **ACTION REQUIRED: SAVE YOUR HISTORY FILE** ⚠️
-            
-            The **Master History** has been updated with this new data.
-            **You MUST download and save this CSV file now.**
-            You will need to upload it as Step 1 next time to keep your trends alive.
-            """)
-            
-            try:
-                hist_csv = full_hist.to_csv(index=False).encode()
-                st.download_button(
-                    "📥 DOWNLOAD UPDATED MASTER HISTORY (REQUIRED)", 
-                    hist_csv, 
-                    "master_history.csv", 
-                    type="primary", 
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"❌ Failed to generate History CSV: {e}")
-            
-            st.divider()
-
-            # --- OTHER RESULTS ---
-            t1, t2 = st.tabs(["📄 Word Report & Audit", "📊 Data Preview"])
-            with t1:
-                if report_doc:
-                    st.download_button("📥 Download Word Report", report_doc, f"Report_{dept_name}_{data_month}.docx")
-                else:
-                    st.error(f"Report Error: {report_error}")
-                
+                # AUDIT EXCEL
                 audit_buffer = BytesIO()
                 wdf.to_excel(audit_buffer, index=False)
-                audit_buffer.seek(0)
-                st.download_button("📥 Download Audit Excel", audit_buffer, f"Audit_{dept_name}_{data_month}.xlsx")
+                
+                # ZIP CREATION
+                st.write("📦 Packaging Files...")
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    # 1. Add Master History (Required)
+                    zf.writestr("master_history.csv", full_hist.to_csv(index=False))
+                    
+                    # 2. Add Word Report (If success)
+                    if report_doc:
+                        zf.writestr(f"Report_{dept_name}_{data_month}.docx", report_doc.getvalue())
+                        
+                    # 3. Add Audit Excel
+                    zf.writestr(f"Audit_{dept_name}_{data_month}.xlsx", audit_buffer.getvalue())
+                    
+                zip_buffer.seek(0)
+                
+            st.success("Analysis Complete!")
+            
+            # --- SINGLE DOWNLOAD BUTTON ---
+            st.divider()
+            st.warning("⬇️ **CLICK BELOW TO DOWNLOAD EVERYTHING (History + Report + Audit)**")
+            
+            st.download_button(
+                label="📦 DOWNLOAD ALL FILES (ZIP)",
+                data=zip_buffer,
+                file_name=f"Hospital_Analysis_{dept_name}_{data_month}.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True
+            )
+            
+            if report_error:
+                st.error(f"⚠️ Note: Word Report failed to generate. Error: {report_error}")
 
-            with t2:
-                st.write("Updated History Preview:")
-                st.dataframe(full_hist.tail(10))
+            # Preview
+            st.divider()
+            st.write("📊 **History Preview:**")
+            st.dataframe(full_hist.tail(10))
 
     except Exception as e:
         st.error(f"Critical App Error: {e}")
