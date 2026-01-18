@@ -49,8 +49,7 @@ def extract_json_from_text(text):
 def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     mapping_dict = {}
     
-    # MAXIMIZE BATCH SIZE to save Quota
-    # Gemini can handle ~2000 tokens easily. 400 lines is safe.
+    # MAXIMIZE BATCH SIZE to save Quota (Safe limit ~400 lines)
     batch_size = 400 
     
     current_key_idx = 0
@@ -214,16 +213,24 @@ if uploaded_file and api_keys and dept_name and data_month:
                 
             st.success("Done!")
             
-            # Downloads
+            # --- FIXED DOWNLOAD SECTION ---
             t1, t2 = st.tabs(["📄 Results", "📜 History"])
+            
             with t1:
+                # 1. Download Word Report
                 if report_doc:
                     st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}.docx")
-                st.download_button("📥 Audit Excel", BytesIO(wdf.to_excel(index=False)), f"Audit_{dept_name}.xlsx")
+                
+                # 2. Download Excel Audit (Corrected Logic)
+                audit_buffer = BytesIO()
+                wdf.to_excel(audit_buffer, index=False)
+                audit_buffer.seek(0)
+                st.download_button("📥 Audit Excel", data=audit_buffer, file_name=f"Audit_{dept_name}.xlsx")
+
             with t2:
+                # 3. Download History
                 st.dataframe(full_hist)
                 st.download_button("📥 Master History (Save This!)", full_hist.to_csv(index=False).encode(), "master_history.csv")
 
     except Exception as e:
         st.error(f"Error: {e}")
-
