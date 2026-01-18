@@ -32,12 +32,11 @@ with st.sidebar:
     
     dept_options = [
         "ICU", 
-        "Emergency Room (ER)", 
+        "Emergency Room ", 
         "Inpatient Ward", 
-        "Outpatient", 
         "PICU", 
         "NICU", 
-        "CCU"
+        "CCU", 
     ]
     dept_name = st.selectbox("Department Name", options=dept_options)
     
@@ -100,98 +99,4 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
         # Retry loop (Rotate Keys -> Rotate Models)
         max_attempts = len(keys_list) * 2 
         
-        for attempt in range(max_attempts):
-            prompt = f"""
-            Act as a Medical Coder. Map these diagnosis strings to ICD-10.
-            Return a JSON object: key = original text, value = {{"Level2": "Block Name", "Level3": "Category Name"}}
-            NO markdown. JUST JSON.
-            List: {json.dumps(batch)}
-            """
-            try:
-                response = model.generate_content(prompt)
-                
-                # Update Tracker
-                st.session_state['api_calls'] += 1
-                quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
-                
-                data = extract_json_from_text(response.text)
-                if data: 
-                    mapping_dict.update(data)
-                    success = True
-                    break # Done with this batch
-                
-            except Exception as e:
-                err = str(e)
-                if "429" in err or "Quota" in err:
-                    # 1. Try Next Key
-                    if len(keys_list) > 1:
-                        current_key_idx = (current_key_idx + 1) % len(keys_list)
-                        st.toast(f"Quota hit. Rotating Key...", icon="🔄")
-                        genai.configure(api_key=keys_list[current_key_idx])
-                        model = genai.GenerativeModel(models_to_try[current_model_idx])
-                        time.sleep(1)
-                        continue
-                    
-                    # 2. If Keys exhausted (or only 1 key), Try Next Model
-                    if current_model_idx < len(models_to_try) - 1:
-                        current_model_idx += 1
-                        st.warning(f"Quota hit on 2.5 Flash. Downgrading to {models_to_try[current_model_idx]}...")
-                        model = genai.GenerativeModel(models_to_try[current_model_idx])
-                        time.sleep(1)
-                        continue
-                        
-                    st.error("❌ CRITICAL: Daily Quota Exceeded on all keys and models.")
-                    st.stop()
-                else:
-                    # Non-quota error? Wait and retry once
-                    time.sleep(2)
-        
-        if success:
-            pbar.progress((i + 1) / total_batches, text=f"Processed batch {i+1}/{total_batches}")
-            time.sleep(2) # Safety pause
-            
-    pbar.empty()
-    return mapping_dict
-
-def update_master_history(current_stats, dept, month, old_hist=None):
-    current_stats['Department'] = dept
-    current_stats['Month'] = month
-    if old_hist is not None and not old_hist.empty:
-        old_hist = old_hist[~((old_hist['Department'] == dept) & (old_hist['Month'] == month))]
-        return pd.concat([old_hist, current_stats], ignore_index=True)
-    return current_stats
-
-def generate_report(history_df, month, dept, keys):
-    genai.configure(api_key=keys[0])
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    
-    dept_hist = history_df[history_df['Department'] == dept]
-    if dept_hist.empty: return None
-    
-    prompt = f"""
-    Analyze this hospital trend data for Dept: {dept}, Month: {month}.
-    CSV Data:
-    {dept_hist.to_csv(index=False)}
-    
-    Write a brief Strategic Report (Executive Summary, Trends, Outliers, Recommendations).
-    """
-    try:
-        response = model.generate_content(prompt)
-        doc = Document()
-        doc.add_heading(f'Strategic Report: {dept} - {month}', 0)
-        doc.add_paragraph(response.text)
-        b = BytesIO()
-        doc.save(b)
-        b.seek(0)
-        return b
-    except: return None
-
-# ==========================================
-# MAIN APP
-# ==========================================
-st.subheader("1. Upload Data")
-uploaded_file = st.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
-
-if uploaded_file and api_keys:
-    try:
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file
+        for attempt in range(
