@@ -148,7 +148,7 @@ def generate_report(history_df, month, dept, keys):
     model = genai.GenerativeModel('gemini-2.5-flash')
     
     dept_hist = history_df[history_df['Department'] == dept]
-    if dept_hist.empty: return None
+    if dept_hist.empty: return None, "No history found for this department."
     
     # --- UPDATED PROMPT: DUAL ROLE ---
     prompt = f"""
@@ -195,8 +195,9 @@ def generate_report(history_df, month, dept, keys):
         b = BytesIO()
         doc.save(b)
         b.seek(0)
-        return b
-    except: return None
+        return b, None # Success, No Error
+    except Exception as e: 
+        return None, str(e) # Failure, Return Error Log
 
 # ==========================================
 # MAIN APP
@@ -258,26 +259,45 @@ if uploaded_file and api_keys:
                 stats.columns = ['Diagnosis Group', 'Cases', 'Mean LOS', 'Median LOS', 'Mean Rev', 'Median Rev']
                 stats['Skew Status'] = stats.apply(lambda x: 'Skewed' if x['Mean LOS'] > (x['Median LOS']*1.5) else 'Normal', axis=1)
                 
-                # 4. REPORT
+                # 4. REPORT & ERROR CAPTURE
                 st.write("📝 Reporting...")
                 old_hist = pd.read_csv(uploaded_history) if uploaded_history else pd.DataFrame()
                 full_hist = update_master_history(stats, dept_name, data_month, old_hist)
-                report_doc = generate_report(full_hist, data_month, dept_name, api_keys)
                 
-            st.success("Done!")
+                # Capture Error Log from Report
+                report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
+                
+            st.success("Analysis Finished!")
             
+            # --- RESULTS SECTION WITH ERROR LOGGING ---
             t1, t2 = st.tabs(["📄 Results", "📜 History"])
             with t1:
-                if report_doc: st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}_{data_month}.docx")
+                # A. REPORT ERROR CHECK
+                if report_doc:
+                    st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}_{data_month}.docx")
+                else:
+                    if report_error:
+                        st.error(f"❌ Failed to generate Word Report.\n**Python Error Log:** `{report_error}`")
+                    else:
+                        st.warning("Report could not be generated (No Data or AI Error).")
                 
-                audit_buffer = BytesIO()
-                wdf.to_excel(audit_buffer, index=False)
-                audit_buffer.seek(0)
-                st.download_button("📥 Audit Excel", data=audit_buffer, file_name=f"Audit_{dept_name}_{data_month}.xlsx")
+                # B. AUDIT EXCEL ERROR CHECK
+                try:
+                    audit_buffer = BytesIO()
+                    wdf.to_excel(audit_buffer, index=False)
+                    audit_buffer.seek(0)
+                    st.download_button("📥 Audit Excel", data=audit_buffer, file_name=f"Audit_{dept_name}_{data_month}.xlsx")
+                except Exception as e:
+                    st.error(f"❌ Failed to generate Audit Excel.\n**Python Error Log:** `{str(e)}`")
 
             with t2:
+                # C. HISTORY CSV ERROR CHECK
                 st.dataframe(full_hist)
-                st.download_button("📥 Master History (Save This!)", full_hist.to_csv(index=False).encode(), "master_history.csv")
+                try:
+                    hist_csv = full_hist.to_csv(index=False).encode()
+                    st.download_button("📥 Master History (Save This!)", hist_csv, "master_history.csv")
+                except Exception as e:
+                    st.error(f"❌ Failed to generate Master History CSV.\n**Python Error Log:** `{str(e)}`")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Critical App Error: {e}")
