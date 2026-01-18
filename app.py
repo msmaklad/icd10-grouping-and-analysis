@@ -55,7 +55,7 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     
     current_key_idx = 0
     # Fallback logic: Try 2.5 -> then 1.5
-    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
+    models_to_try = ['gemini-2.5-flash']
     current_model_idx = 0
     
     # Init first key/model
@@ -226,3 +226,4 @@ if uploaded_file and api_keys and dept_name and data_month:
 
     except Exception as e:
         st.error(f"Error: {e}")
+
