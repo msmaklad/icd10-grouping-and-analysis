@@ -20,8 +20,19 @@ st.title("🏥 Hospital Intelligence: ICD-10 Trend Analyzer")
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # 1. API KEYS
-    api_keys_input = st.text_area("Enter Google Gemini API Keys (One per line)", height=150)
+    # 1. API KEYS SECTION
+    st.subheader("🔑 API Access")
+    
+    # HELPFUL LINKS (NEW ADDITION)
+    st.markdown("To ensure unlimited usage, please use your own **Free** Google Gemini Keys.")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.link_button("🛠️ Get Key (Google Studio)", "https://aistudio.google.com/app/apikey")
+    with c2:
+        st.link_button("🎥 How-To Video", "https://www.youtube.com/results?search_query=how+to+get+google+gemini+api+key")
+
+    api_keys_input = st.text_area("Enter API Keys (One per line)", height=150, placeholder="Paste your keys here...")
     api_keys = [k.strip() for k in api_keys_input.split('\n') if k.strip()]
     
     st.divider()
@@ -40,7 +51,7 @@ with st.sidebar:
     quota_placeholder = st.empty()
     quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
     
-    # RESET BUTTON (SIDEBAR)
+    # RESET BUTTON
     st.divider()
     if st.button("🔄 Reset App State", use_container_width=True):
         st.rerun()
@@ -61,7 +72,7 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     batch_size = 400 
     
     current_key_idx = 0
-    models_to_try = ['gemini-2.5-flash']
+    models_to_try = ['gemini-2.5-flash', 'gemini-pro']
     current_model_idx = 0
     
     genai.configure(api_key=keys_list[current_key_idx])
