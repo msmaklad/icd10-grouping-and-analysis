@@ -20,16 +20,44 @@ st.title("🏥 Hospital Intelligence: ICD-10 Trend Analyzer")
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Configuration")
+    
+    # 1. API KEYS
     api_keys_input = st.text_area("Enter Google Gemini API Keys (One per line)", height=150)
     api_keys = [k.strip() for k in api_keys_input.split('\n') if k.strip()]
     
     st.divider()
-    dept_name = st.text_input("Department Name", placeholder="e.g., ICU")
-    data_month = st.text_input("Data Month/Year", placeholder="e.g., Jan 2026")
+    
+    # 2. STANDARDIZED DEPARTMENT SELECTION
+    st.subheader("📋 Context Metadata")
+    
+    dept_options = [
+        "ICU", 
+        "Emergency Room (ER)", 
+        "Inpatient Ward", 
+        "Outpatient", 
+        "PICU", 
+        "NICU", 
+        "CCU"
+    ]
+    dept_name = st.selectbox("Department Name", options=dept_options)
+    
+    # 3. STANDARDIZED DATE SELECTION
+    st.write("Data Period:")
+    col_m, col_y = st.columns(2)
+    
+    with col_m:
+        sel_month = st.selectbox("Month", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
+    with col_y:
+        sel_year = st.selectbox("Year", [str(y) for y in range(2024, 2030)])
+        
+    data_month = f"{sel_month} {sel_year}"
+    
+    # 4. HISTORY UPLOAD
+    st.divider()
     uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
 
+    # 5. QUOTA TRACKER
     st.divider()
-    # QUOTA TRACKER
     if 'api_calls' not in st.session_state: st.session_state['api_calls'] = 0
     quota_placeholder = st.empty()
     quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
@@ -49,12 +77,12 @@ def extract_json_from_text(text):
 def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     mapping_dict = {}
     
-    # MAXIMIZE BATCH SIZE to save Quota (Safe limit ~400 lines)
+    # MAXIMIZE BATCH SIZE to save Quota
+    # Safe limit ~400 lines per call for Gemini
     batch_size = 400 
     
     current_key_idx = 0
-    # Fallback logic: Try 2.5 -> then 1.5
-    models_to_try = ['gemini-2.5-flash']
+    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
     current_model_idx = 0
     
     # Init first key/model
@@ -164,73 +192,6 @@ def generate_report(history_df, month, dept, keys):
 st.subheader("1. Upload Data")
 uploaded_file = st.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
 
-if uploaded_file and api_keys and dept_name and data_month:
+if uploaded_file and api_keys:
     try:
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        st.dataframe(df.head(3))
-        
-        st.divider()
-        st.subheader("2. Map Columns")
-        cols = list(df.columns)
-        c1, c2, c3 = st.columns(3)
-        col_id = c1.selectbox("Patient ID", cols, index=0)
-        col_diag = c2.selectbox("Diagnosis", cols, index=min(1, len(cols)-1))
-        col_rev = c3.selectbox("Revenue", cols, index=min(2, len(cols)-1))
-        col_adm = c1.selectbox("Admission Date", cols, index=min(3, len(cols)-1))
-        col_disch = c2.selectbox("Discharge Date", cols, index=min(4, len(cols)-1))
-        
-        if st.button("🚀 Run Analysis", type="primary"):
-            with st.status("Processing...", expanded=True):
-                # Prep
-                wdf = df.rename(columns={col_id:'ID', col_diag:'DIAG', col_rev:'REV', col_adm:'ADM', col_disch:'DISCH'})
-                wdf['ADM'] = pd.to_datetime(wdf['ADM'], errors='coerce')
-                wdf['DISCH'] = pd.to_datetime(wdf['DISCH'], errors='coerce')
-                wdf['LOS'] = (wdf['DISCH'] - wdf['ADM']).dt.days.fillna(0).clip(lower=0)
-                wdf['REV'] = pd.to_numeric(wdf['REV'], errors='coerce').fillna(0)
-                
-                # AI Map
-                st.write("🧠 Mapping...")
-                unique = wdf['DIAG'].unique().tolist()
-                mapping = get_icd_mapping_optimized(api_keys, unique)
-                
-                if not mapping:
-                    st.error("AI Mapping Failed.")
-                    st.stop()
-
-                wdf['Level3'] = wdf['DIAG'].map(lambda x: mapping.get(x, {}).get("Level3", "Unmapped"))
-                wdf['Level2'] = wdf['DIAG'].map(lambda x: mapping.get(x, {}).get("Level2", "Unmapped"))
-                
-                # Stats
-                stats = wdf.groupby('Level3').agg({'DIAG':'count', 'LOS':['mean','median'], 'REV':['mean','median']}).reset_index()
-                stats.columns = ['Diagnosis Group', 'Cases', 'Mean LOS', 'Median LOS', 'Mean Rev', 'Median Rev']
-                stats['Skew Status'] = stats.apply(lambda x: 'Skewed' if x['Mean LOS'] > (x['Median LOS']*1.5) else 'Normal', axis=1)
-                
-                # History & Report
-                st.write("📝 Reporting...")
-                old_hist = pd.read_csv(uploaded_history) if uploaded_history else pd.DataFrame()
-                full_hist = update_master_history(stats, dept_name, data_month, old_hist)
-                report_doc = generate_report(full_hist, data_month, dept_name, api_keys)
-                
-            st.success("Done!")
-            
-            # --- FIXED DOWNLOAD SECTION ---
-            t1, t2 = st.tabs(["📄 Results", "📜 History"])
-            
-            with t1:
-                # 1. Download Word Report
-                if report_doc:
-                    st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}.docx")
-                
-                # 2. Download Excel Audit (Corrected Logic)
-                audit_buffer = BytesIO()
-                wdf.to_excel(audit_buffer, index=False)
-                audit_buffer.seek(0)
-                st.download_button("📥 Audit Excel", data=audit_buffer, file_name=f"Audit_{dept_name}.xlsx")
-
-            with t2:
-                # 3. Download History
-                st.dataframe(full_hist)
-                st.download_button("📥 Master History (Save This!)", full_hist.to_csv(index=False).encode(), "master_history.csv")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
+        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file
