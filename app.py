@@ -4,7 +4,6 @@ import google.generativeai as genai
 import json
 import time
 import os
-import re
 from docx import Document
 from io import BytesIO
 
@@ -12,7 +11,6 @@ from io import BytesIO
 # CONFIG & SETUP
 # ==========================================
 st.set_page_config(page_title="ICD-10 Hospital Intelligence", page_icon="🏥", layout="wide")
-
 st.title("🏥 Hospital Intelligence: ICD-10 Trend Analyzer")
 
 # ==========================================
@@ -27,40 +25,18 @@ with st.sidebar:
     
     st.divider()
     
-    # 2. STANDARDIZED DEPARTMENT SELECTION
-    st.subheader("📋 Context Metadata")
-    
-    dept_options = [
-        "ICU", 
-        "Emergency Room (ER)", 
-        "Inpatient Ward", 
-        "Outpatient", 
-        "Surgery / OR", 
-        "Pediatrics", 
-        "Cardiology", 
-        "Oncology",
-        "Radiology",
-        "General Medicine",
-        "Pharmacy"
-    ]
+    # 2. STANDARDIZED SELECTIONS
+    dept_options = ["ICU", "Emergency Room (ER)", "Inpatient Ward", "CCU", "PICU", "NICU"]
     dept_name = st.selectbox("Department Name", options=dept_options)
     
-    # 3. STANDARDIZED DATE SELECTION
-    st.write("Data Period:")
     col_m, col_y = st.columns(2)
-    
-    with col_m:
-        sel_month = st.selectbox("Month", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
-    with col_y:
-        sel_year = st.selectbox("Year", [str(y) for y in range(2024, 2030)])
-        
+    with col_m: sel_month = st.selectbox("Month", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
+    with col_y: sel_year = st.selectbox("Year", [str(y) for y in range(2024, 2030)])
     data_month = f"{sel_month} {sel_year}"
     
-    # 4. HISTORY UPLOAD
     st.divider()
     uploaded_history = st.file_uploader("📂 Upload Previous Master History (Optional)", type=['csv'])
-
-    # 5. QUOTA TRACKER
+    
     st.divider()
     if 'api_calls' not in st.session_state: st.session_state['api_calls'] = 0
     quota_placeholder = st.empty()
@@ -69,7 +45,6 @@ with st.sidebar:
 # ==========================================
 # HELPER FUNCTIONS
 # ==========================================
-
 def extract_json_from_text(text):
     try:
         start = text.find('{')
@@ -80,20 +55,15 @@ def extract_json_from_text(text):
 
 def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     mapping_dict = {}
-    
-    # MAXIMIZE BATCH SIZE to save Quota
-    # Safe limit ~400 lines per call for Gemini
     batch_size = 400 
     
     current_key_idx = 0
-    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
+    models_to_try = ['gemini-2.5-flash']
     current_model_idx = 0
     
-    # Init first key/model
     genai.configure(api_key=keys_list[current_key_idx])
     model = genai.GenerativeModel(models_to_try[current_model_idx])
     
-    # Progress Bar
     total_batches = (len(unique_diagnoses) + batch_size - 1) // batch_size
     pbar = st.progress(0, text="AI Analysis Starting...")
     
@@ -101,20 +71,21 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     
     for i, batch in enumerate(batches):
         success = False
-        # Retry loop (Rotate Keys -> Rotate Models)
         max_attempts = len(keys_list) * 2 
         
         for attempt in range(max_attempts):
-            prompt = f"""
-            Act as a Medical Coder. Map these diagnosis strings to ICD-10.
-            Return a JSON object: key = original text, value = {{"Level2": "Block Name", "Level3": "Category Name"}}
-            NO markdown. JUST JSON.
-            List: {json.dumps(batch)}
-            """
             try:
+                json_payload = json.dumps(batch, default=str)
+                
+                prompt = f"""
+                Act as a Medical Coder. Map these diagnosis strings to ICD-10.
+                Return a JSON object: key = original text, value = {{"Level2": "Block Name", "Level3": "Category Name"}}
+                NO markdown. JUST JSON.
+                List: {json_payload}
+                """
+                
                 response = model.generate_content(prompt)
                 
-                # Update Tracker
                 st.session_state['api_calls'] += 1
                 quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
                 
@@ -122,12 +93,11 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
                 if data: 
                     mapping_dict.update(data)
                     success = True
-                    break # Done with this batch
+                    break 
                 
             except Exception as e:
                 err = str(e)
                 if "429" in err or "Quota" in err:
-                    # 1. Try Next Key
                     if len(keys_list) > 1:
                         current_key_idx = (current_key_idx + 1) % len(keys_list)
                         st.toast(f"Quota hit. Rotating Key...", icon="🔄")
@@ -136,23 +106,31 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
                         time.sleep(1)
                         continue
                     
-                    # 2. If Keys exhausted (or only 1 key), Try Next Model
                     if current_model_idx < len(models_to_try) - 1:
                         current_model_idx += 1
-                        st.warning(f"Quota hit on 2.5 Flash. Downgrading to {models_to_try[current_model_idx]}...")
+                        st.warning(f"Quota hit. Downgrading to {models_to_try[current_model_idx]}...")
                         model = genai.GenerativeModel(models_to_try[current_model_idx])
                         time.sleep(1)
                         continue
-                        
-                    st.error("❌ CRITICAL: Daily Quota Exceeded on all keys and models.")
+                    
+                    st.error(f"""
+                    ❌ **QUOTA FAILURE** The AI has stopped accepting requests.
+                    - **Reason:** Daily limit reached for all keys.
+                    - **Limit:** ~20 requests/day (Gemini 2.5 Flash Free Tier).
+                    
+                    **Action Required:**
+                    1. Wait 24 hours.
+                    2. Or add a fresh API key in the sidebar.
+                    """)
                     st.stop()
+                    
                 else:
-                    # Non-quota error? Wait and retry once
-                    time.sleep(2)
+                    print(f"Batch Error: {e}") 
+                    time.sleep(1)
         
         if success:
             pbar.progress((i + 1) / total_batches, text=f"Processed batch {i+1}/{total_batches}")
-            time.sleep(2) # Safety pause
+            time.sleep(1)
             
     pbar.empty()
     return mapping_dict
@@ -172,13 +150,43 @@ def generate_report(history_df, month, dept, keys):
     dept_hist = history_df[history_df['Department'] == dept]
     if dept_hist.empty: return None
     
+    # --- UPDATED PROMPT: DUAL ROLE ---
     prompt = f"""
-    Analyze this hospital trend data for Dept: {dept}, Month: {month}.
-    CSV Data:
+    Act as a **Dual-Role Executive: Strategic Director & Clinical Governance Lead**.
+    Your task is to produce a comprehensive **Integrated Case Mix & Strategic Analysis Report** for the '{dept}' department.
+    
+    **Context:**
+    - Current Period: {month}
+    - Data Source: Historical ICD-10 Diagnosis Groups (Level 3)
+    
+    **Dataset (CSV):**
     {dept_hist.to_csv(index=False)}
     
-    Write a brief Strategic Report (Executive Summary, Trends, Outliers, Recommendations).
+    **Report Structure & Requirements:**
+    
+    1. **Executive Summary (Business & Clinical):**
+       - High-level overview of patient volume, revenue performance, and clinical stability for {month}.
+       - Highlight the most critical "Takeaway" for hospital leadership.
+
+    2. **Trend & Case Mix Analysis:**
+       - **Volume Trends:** Compare {month} vs previous months. Identify which conditions are rising (Historical Trend).
+       - **Case Mix Profile:** Identify the "Top 5" diagnosis groups by volume. Are we seeing a shift towards more complex/severe cases?
+
+    3. **Operational Efficiency & Clinical Governance:**
+       - **LOS Outlier Analysis:** Analyze rows where 'Skew Status' is 'Skewed' (Mean LOS > Median LOS).
+       - **Risk Implication:** Explain that these skewed groups represent potential **Clinical Risks** (complications/safety issues) and **Operational Bottlenecks** (bed blocking).
+       - Identify specific conditions causing the biggest efficiency drag.
+
+    4. **Revenue Integrity & Resource Utilization:**
+       - Compare "High Revenue" groups against "Long LOS" groups.
+       - **Profitability vs. Cost:** Are high-revenue cases being managed efficiently, or is the extended length of stay eroding the margin?
+
+    5. **Integrated Recommendations (Action Plan):**
+       - **Strategic:** Advice on capacity planning or resource allocation based on volume trends.
+       - **Clinical Governance:** Recommend specific **Clinical Pathways** or protocols for the high-skew/outlier groups to improve safety.
+       - **Documentation:** Advice on improving coding specificity if "Unmapped" or vague codes appear.
     """
+    
     try:
         response = model.generate_content(prompt)
         doc = Document()
@@ -198,9 +206,7 @@ uploaded_file = st.file_uploader("Upload CSV/Excel", type=['csv', 'xlsx'])
 
 if uploaded_file and api_keys:
     try:
-        # --- FIXED LINE BELOW (Added closing parenthesis) ---
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        
         st.dataframe(df.head(3))
         
         st.divider()
@@ -215,31 +221,44 @@ if uploaded_file and api_keys:
         
         if st.button("🚀 Run Analysis", type="primary"):
             with st.status("Processing...", expanded=True):
-                # Prep
+                # 1. CLEAN DATA
+                st.write("🔧 Cleaning data...")
                 wdf = df.rename(columns={col_id:'ID', col_diag:'DIAG', col_rev:'REV', col_adm:'ADM', col_disch:'DISCH'})
+                
+                # FORCE STRING & DROP EMPTY
+                wdf = wdf.dropna(subset=['DIAG']) 
+                wdf['DIAG'] = wdf['DIAG'].astype(str) 
+                wdf = wdf[wdf['DIAG'].str.strip() != ''] 
+                
+                # Date & Num processing
                 wdf['ADM'] = pd.to_datetime(wdf['ADM'], errors='coerce')
                 wdf['DISCH'] = pd.to_datetime(wdf['DISCH'], errors='coerce')
                 wdf['LOS'] = (wdf['DISCH'] - wdf['ADM']).dt.days.fillna(0).clip(lower=0)
                 wdf['REV'] = pd.to_numeric(wdf['REV'], errors='coerce').fillna(0)
                 
-                # AI Map
-                st.write("🧠 Mapping...")
+                # 2. AI MAPPING
+                st.write(f"🧠 Mapping {len(wdf)} records...")
                 unique = wdf['DIAG'].unique().tolist()
+                
+                if not unique:
+                    st.error("No valid diagnoses found.")
+                    st.stop()
+                    
                 mapping = get_icd_mapping_optimized(api_keys, unique)
                 
                 if not mapping:
-                    st.error("AI Mapping Failed.")
+                    st.error("AI Mapping Failed completely.")
                     st.stop()
 
                 wdf['Level3'] = wdf['DIAG'].map(lambda x: mapping.get(x, {}).get("Level3", "Unmapped"))
                 wdf['Level2'] = wdf['DIAG'].map(lambda x: mapping.get(x, {}).get("Level2", "Unmapped"))
                 
-                # Stats
+                # 3. STATS
                 stats = wdf.groupby('Level3').agg({'DIAG':'count', 'LOS':['mean','median'], 'REV':['mean','median']}).reset_index()
                 stats.columns = ['Diagnosis Group', 'Cases', 'Mean LOS', 'Median LOS', 'Mean Rev', 'Median Rev']
                 stats['Skew Status'] = stats.apply(lambda x: 'Skewed' if x['Mean LOS'] > (x['Median LOS']*1.5) else 'Normal', axis=1)
                 
-                # History & Report
+                # 4. REPORT
                 st.write("📝 Reporting...")
                 old_hist = pd.read_csv(uploaded_history) if uploaded_history else pd.DataFrame()
                 full_hist = update_master_history(stats, dept_name, data_month, old_hist)
@@ -247,11 +266,9 @@ if uploaded_file and api_keys:
                 
             st.success("Done!")
             
-            # Downloads
             t1, t2 = st.tabs(["📄 Results", "📜 History"])
             with t1:
-                if report_doc:
-                    st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}_{data_month}.docx")
+                if report_doc: st.download_button("📥 Word Report", report_doc, f"Report_{dept_name}_{data_month}.docx")
                 
                 audit_buffer = BytesIO()
                 wdf.to_excel(audit_buffer, index=False)
