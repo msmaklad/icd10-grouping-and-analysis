@@ -5,7 +5,9 @@ import json
 import time
 import os
 import zipfile
+import re
 from docx import Document
+from docx.shared import Pt, RGBColor
 from io import BytesIO
 
 # ==========================================
@@ -60,7 +62,7 @@ with st.sidebar:
     
     st.divider()
     
-    # --- 3. STANDARDIZED SELECTIONS (UPDATED LIST) ---
+    # --- 3. STANDARDIZED SELECTIONS ---
     dept_options = ["ICU", "CCU", "PICU", "Inpatient Ward", "ER"]
     dept_name = st.selectbox("Department Name", options=dept_options)
     
@@ -95,7 +97,6 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     batch_size = 400 
     
     current_key_idx = 0
-    # --- UPDATED MODEL LIST ---
     models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
     current_model_idx = 0
     
@@ -170,6 +171,47 @@ def update_master_history(current_stats, dept, month, old_hist=None):
         return pd.concat([old_hist, current_stats], ignore_index=True)
     return current_stats
 
+# --- NEW FUNCTION: PARSES MARKDOWN TO CLEAN DOCX ---
+def write_markdown_to_docx(doc, text):
+    lines = text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # 1. Handle Headings (e.g. ## Title)
+        if line.startswith('#'):
+            level = min(line.count('#'), 3) # Max heading level 3
+            clean_text = line.lstrip('#').strip()
+            # Clean bold syntax from headings
+            clean_text = clean_text.replace('**', '').replace('__', '')
+            doc.add_heading(clean_text, level=level)
+            
+        # 2. Handle Lists (e.g. * Item or - Item)
+        elif line.startswith(('* ', '- ', '• ')):
+            clean_text = line[2:].strip()
+            p = doc.add_paragraph(style='List Bullet')
+            # Handle Bold inside list items
+            parts = re.split(r'(\*\*.*?\*\*)', clean_text)
+            for part in parts:
+                if part.startswith('**') and part.endswith('**'):
+                    run = p.add_run(part[2:-2])
+                    run.bold = True
+                else:
+                    p.add_run(part)
+                    
+        # 3. Handle Normal Paragraphs
+        else:
+            p = doc.add_paragraph()
+            # Handle Bold inside normal text
+            parts = re.split(r'(\*\*.*?\*\*)', line)
+            for part in parts:
+                if part.startswith('**') and part.endswith('**'):
+                    run = p.add_run(part[2:-2])
+                    run.bold = True
+                else:
+                    p.add_run(part)
+
 def generate_report(history_df, month, dept, keys):
     genai.configure(api_key=keys[0])
     model = genai.GenerativeModel('gemini-2.5-flash')
@@ -188,6 +230,10 @@ def generate_report(history_df, month, dept, keys):
     **Dataset (CSV):**
     {dept_hist.to_csv(index=False)}
     
+    **Instructions for Output:**
+    - Do NOT use code blocks.
+    - Use standard Markdown formatting: # for headings, ** for bold, - for bullets.
+    
     **Report Structure:**
     1. **Executive Summary** (Business & Clinical)
     2. **Trend & Case Mix Analysis** (Volume & Severity Shifts)
@@ -200,7 +246,10 @@ def generate_report(history_df, month, dept, keys):
         response = model.generate_content(prompt)
         doc = Document()
         doc.add_heading(f'Strategic Report: {dept} - {month}', 0)
-        doc.add_paragraph(response.text)
+        
+        # --- USE THE CLEANER FUNCTION ---
+        write_markdown_to_docx(doc, response.text)
+        
         b = BytesIO()
         doc.save(b)
         b.seek(0)
@@ -299,7 +348,7 @@ if uploaded_file and api_keys:
                 st.write("📝 Generating Strategic Report...")
                 report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
                 
-                # GENERATE DYNAMIC FILE NAMES
+                # FILE NAMING
                 safe_dept = dept_name.replace(" ", "_").replace("/", "-")
                 safe_month = data_month.replace(" ", "_")
                 
@@ -315,9 +364,7 @@ if uploaded_file and api_keys:
                 
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    # WRITE HISTORY WITH NEW NAME
                     zf.writestr(history_filename, full_hist.to_csv(index=False))
-                    
                     if report_doc:
                         zf.writestr(report_filename, report_doc.getvalue())
                     zf.writestr(audit_filename, audit_buffer.getvalue())
