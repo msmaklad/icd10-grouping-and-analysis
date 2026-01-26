@@ -19,11 +19,10 @@ st.title("🏥 Hospital Intelligence: ICD-10 Trend Analyzer")
 # ==========================================
 with st.sidebar:
     # --- 1. INSTRUCTIONS SECTION ---
-    # (Notice this block is indented 4 spaces inside 'with st.sidebar')
     with st.expander("📖 **Step-by-Step Guide**", expanded=True):
         st.markdown("""
         **1. Initialize History:**
-           - If you have `master_history.csv` from last time, select **"Yes"** and upload it.
+           - If you have a history file (e.g., `Jan_2026-ICU-history.csv`), select **"Yes"** and upload it.
            - If this is your first time, select **"No (Start Fresh)"**.
         
         **2. Configure:**
@@ -40,7 +39,7 @@ with st.sidebar:
            
         **5. Download:**
            - Click **📦 DOWNLOAD ALL FILES**.
-           - **Crucial:** Save the ZIP file! It contains the updated History for next time.
+           - **Crucial:** The ZIP contains your new `(Month)-(Dept)-history.csv`. Save it!
         """)
     
     st.divider()
@@ -61,8 +60,8 @@ with st.sidebar:
     
     st.divider()
     
-    # --- 3. STANDARDIZED SELECTIONS ---
-    dept_options = ["ICU", "Emergency Room (ER)", "Inpatient Ward", "Outpatient", "Surgery / OR", "Pediatrics", "Cardiology", "Oncology", "Radiology", "General Medicine", "Pharmacy"]
+    # --- 3. STANDARDIZED SELECTIONS (UPDATED LIST) ---
+    dept_options = ["ICU", "CCU", "PICU", "Inpatient Ward", "ER"]
     dept_name = st.selectbox("Department Name", options=dept_options)
     
     col_m, col_y = st.columns(2)
@@ -96,7 +95,7 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     batch_size = 400 
     
     current_key_idx = 0
-    # --- UPDATED MODEL LIST AS REQUESTED ---
+    # --- UPDATED MODEL LIST ---
     models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
     current_model_idx = 0
     
@@ -217,17 +216,19 @@ if 'analysis_done' not in st.session_state:
     st.session_state['analysis_done'] = False
 if 'zip_buffer' not in st.session_state:
     st.session_state['zip_buffer'] = None
+if 'history_filename' not in st.session_state:
+    st.session_state['history_filename'] = "master_history.csv"
 
 # STEP 1: MANDATORY HISTORY LOAD
 st.subheader("1. Initialize History (Mandatory)")
-st.info("To generate comparative trends, you must load the Master History file first.")
+st.info("To maintain trends, please upload your previous history file (e.g., `Jan_2026-ICU-history.csv`).")
 
-history_mode = st.radio("Do you have an existing Master History file?", ["Yes, I have it", "No, this is Day 1 (Start Fresh)"], horizontal=True)
+history_mode = st.radio("Do you have a previous history file?", ["Yes, I have it", "No, this is Day 1 (Start Fresh)"], horizontal=True)
 
 history_df = pd.DataFrame() 
 
 if history_mode == "Yes, I have it":
-    uploaded_history = st.file_uploader("📂 Upload 'master_history.csv'", type=['csv'], key="hist_up")
+    uploaded_history = st.file_uploader("📂 Upload History CSV", type=['csv'], key="hist_up")
     if uploaded_history:
         try:
             history_df = pd.read_csv(uploaded_history)
@@ -298,6 +299,15 @@ if uploaded_file and api_keys:
                 st.write("📝 Generating Strategic Report...")
                 report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
                 
+                # GENERATE DYNAMIC FILE NAMES
+                safe_dept = dept_name.replace(" ", "_").replace("/", "-")
+                safe_month = data_month.replace(" ", "_")
+                
+                history_filename = f"{safe_month}-{safe_dept}-history.csv"
+                report_filename = f"Report_{safe_month}-{safe_dept}.docx"
+                audit_filename = f"Audit_{safe_month}-{safe_dept}.xlsx"
+                zip_filename = f"Hospital_Analysis_{safe_month}-{safe_dept}.zip"
+                
                 # ZIP CREATION
                 st.write("📦 Packaging Files...")
                 audit_buffer = BytesIO()
@@ -305,16 +315,19 @@ if uploaded_file and api_keys:
                 
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
-                    zf.writestr("master_history.csv", full_hist.to_csv(index=False))
+                    # WRITE HISTORY WITH NEW NAME
+                    zf.writestr(history_filename, full_hist.to_csv(index=False))
+                    
                     if report_doc:
-                        zf.writestr(f"Report_{dept_name}_{data_month}.docx", report_doc.getvalue())
-                    zf.writestr(f"Audit_{dept_name}_{data_month}.xlsx", audit_buffer.getvalue())
+                        zf.writestr(report_filename, report_doc.getvalue())
+                    zf.writestr(audit_filename, audit_buffer.getvalue())
                     
                 zip_buffer.seek(0)
                 
                 st.session_state['zip_buffer'] = zip_buffer
                 st.session_state['analysis_done'] = True
                 st.session_state['full_hist'] = full_hist
+                st.session_state['zip_filename'] = zip_filename
                 
             st.success("Analysis Complete!")
             st.rerun()
@@ -331,7 +344,7 @@ if st.session_state.get('analysis_done') and st.session_state.get('zip_buffer'):
     st.download_button(
         label="📦 DOWNLOAD ALL FILES (ZIP)",
         data=st.session_state['zip_buffer'],
-        file_name=f"Hospital_Analysis_{dept_name}_{data_month}.zip",
+        file_name=st.session_state['zip_filename'],
         mime="application/zip",
         type="primary",
         use_container_width=True
