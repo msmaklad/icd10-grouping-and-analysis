@@ -14,7 +14,7 @@ from io import BytesIO
 # 1. PAGE CONFIGURATION & SETUP
 # ========================================================
 st.set_page_config(page_title="ICD-10 Hospital Intelligence (Secure Test)", page_icon="🏥", layout="wide")
-st.title("🏥 Hospital Intelligence: case mix analysis")
+st.title("🏥 Hospital Intelligence: Secure Testing Edition")
 
 # ========================================================
 # 2. SIDEBAR & USER INSTRUCTIONS
@@ -162,7 +162,7 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
                         model = genai.GenerativeModel(models_to_try[current_model_idx])
                         time.sleep(1)
                         continue
-                    st.error("❌ **QUOTA FAILURE** Daily limit reached. Wait 24h or add new key.")
+                    st.error("❌ **QUOTA FAILURE** Daily limit reached. Wait 24h.")
                     st.stop()
                 else:
                     time.sleep(1)
@@ -187,28 +187,76 @@ def update_master_history(current_stats, dept, month, old_hist=None):
         return pd.concat([old_hist, current_stats], ignore_index=True)
     return current_stats
 
-# --- RICH FORMATTER (MARKDOWN TO WORD) ---
+# --- UPGRADED FORMATTER (MARKDOWN TABLES -> WORD TABLES) ---
 def write_markdown_to_docx(doc, text):
     """
     Parses Markdown text and applies real Word formatting.
-    Handles Headings (#) and Bold (**text**).
+    Handles:
+    - Headings (#)
+    - Lists (*)
+    - Bold (**text**)
+    - Tables (| col | col |)
     """
     lines = text.split('\n')
+    table_buffer = []
+
+    def flush_table(buffer):
+        if not buffer: return
+        # Create table data structure
+        # Remove leading/trailing pipes and split
+        rows = []
+        for row_str in buffer:
+            # Check for separator row (---)
+            if '---' in row_str:
+                continue
+            cells = [c.strip() for c in row_str.strip('|').split('|')]
+            rows.append(cells)
+        
+        if not rows: return
+        
+        # Determine columns based on header
+        num_cols = len(rows[0])
+        table = doc.add_table(rows=len(rows), cols=num_cols)
+        table.style = 'Table Grid'
+        
+        for i, row_data in enumerate(rows):
+            # Ensure row matches column count (handle uneven md tables)
+            safe_row_data = row_data[:num_cols] + [''] * (num_cols - len(row_data))
+            
+            for j, cell_text in enumerate(safe_row_data):
+                cell = table.cell(i, j)
+                cell.text = cell_text
+                # Bold header row
+                if i == 0:
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+
     for line in lines:
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        
+        # 1. Detect Table Lines
+        if stripped.startswith('|'):
+            table_buffer.append(stripped)
+            continue
+        else:
+            # If we were building a table, flush it now
+            if table_buffer:
+                flush_table(table_buffer)
+                table_buffer = []
+        
+        if not stripped:
             continue
             
-        # 1. Handle Headings (e.g. ## Title)
-        if line.startswith('#'):
-            level = min(line.count('#'), 3)
-            # Remove hash and bold markers from heading text
-            clean_text = line.lstrip('#').strip().replace('**', '').replace('__', '')
+        # 2. Handle Headings (e.g. ## Title)
+        if stripped.startswith('#'):
+            level = min(stripped.count('#'), 3)
+            clean_text = stripped.lstrip('#').strip().replace('**', '').replace('__', '')
             doc.add_heading(clean_text, level=level)
             
-        # 2. Handle Lists (e.g. * Item or - Item)
-        elif line.startswith(('* ', '- ', '• ')):
-            clean_text = line[2:].strip()
+        # 3. Handle Lists (e.g. * Item)
+        elif stripped.startswith(('* ', '- ', '• ')):
+            clean_text = stripped[2:].strip()
             p = doc.add_paragraph(style='List Bullet')
             # Handle Bold inside list items
             parts = re.split(r'(\*\*.*?\*\*)', clean_text)
@@ -219,17 +267,21 @@ def write_markdown_to_docx(doc, text):
                 else:
                     p.add_run(part)
                     
-        # 3. Handle Normal Paragraphs
+        # 4. Handle Normal Paragraphs
         else:
             p = doc.add_paragraph()
             # Handle Bold inside normal text
-            parts = re.split(r'(\*\*.*?\*\*)', line)
+            parts = re.split(r'(\*\*.*?\*\*)', stripped)
             for part in parts:
                 if part.startswith('**') and part.endswith('**'):
                     run = p.add_run(part[2:-2])
                     run.bold = True
                 else:
                     p.add_run(part)
+    
+    # Flush any remaining table at the very end
+    if table_buffer:
+        flush_table(table_buffer)
 
 def generate_report(history_df, month, dept, keys):
     genai.configure(api_key=keys[0])
@@ -250,11 +302,15 @@ def generate_report(history_df, month, dept, keys):
     {dept_hist.to_csv(index=False)}
     
     **Instructions:**
-    - Use Markdown formatting (# Heading, **Bold**, * Bullet). NO code blocks.
+    - Use Markdown formatting:
+      - # for Headings
+      - **Bold** for emphasis
+      - | Table | syntax | for data tables
+    - NO code blocks.
     
     **Report Structure:**
     1. **Executive Summary** (Business & Clinical)
-    2. **Trend & Case Mix Analysis** (Volume & Severity Shifts)
+    2. **Trend & Case Mix Analysis** (Use a Table for Top 5 Changes)
     3. **Operational Efficiency & Clinical Governance** (Skewed LOS & Risk)
     4. **Revenue Integrity** (Profitability vs Cost)
     5. **Integrated Recommendations** (Pathways, Capacity, Coding)
