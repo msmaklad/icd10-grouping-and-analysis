@@ -6,50 +6,45 @@ import time
 import os
 import zipfile
 import re
+import hashlib
 from docx import Document
-from docx.shared import Pt, RGBColor
 from io import BytesIO
 
-# ==========================================
-# CONFIG & SETUP
-# ==========================================
-st.set_page_config(page_title="ICD-10 Hospital Intelligence", page_icon="🏥", layout="wide")
-st.title("🏥 Hospital Intelligence: ICD-10 Trend Analyzer")
+# ========================================================
+# 1. PAGE CONFIGURATION & SETUP
+# ========================================================
+st.set_page_config(page_title="ICD-10 Hospital Intelligence (Secure Test)", page_icon="🏥", layout="wide")
+st.title("🏥 Hospital Intelligence: case mix analysis")
 
-# ==========================================
-# SIDEBAR
-# ==========================================
+# ========================================================
+# 2. SIDEBAR & USER INSTRUCTIONS
+# ========================================================
 with st.sidebar:
-    # --- 1. INSTRUCTIONS SECTION ---
-    with st.expander("📖 **Step-by-Step Guide**", expanded=True):
+    # --- INSTRUCTIONS BLOCK ---
+    with st.expander("📖 **How to Use**", expanded=True):
         st.markdown("""
-        **1. Initialize History:**
-           - If you have a history file (e.g., `Jan_2026-ICU-history.csv`), select **"Yes"** and upload it.
-           - If this is your first time, select **"No (Start Fresh)"**.
-        
-        **2. Configure:**
-           - Enter your **API Keys**.
-           - Select **Department** & **Month**.
-        
-        **3. Upload Data:**
-           - Upload your raw hospital file (CSV/Excel).
-           - Map the columns (Diagnosis, Date, etc.) to match your file.
+        **1. Initialize History**
+        Upload your previous history file (if available).
            
-        **4. Run:**
-           - Click **🚀 Run Analysis**.
-           - Wait for AI mapping & report generation.
+        **2. Configure Settings**
+        Enter API Keys, Department, and Month.
+        
+        **3. Upload Current Month Data**
+        Upload your raw Excel or CSV file.
            
-        **5. Download:**
-           - Click **📦 DOWNLOAD ALL FILES**.
-           - **Crucial:** The ZIP contains your new `(Month)-(Dept)-history.csv`. Save it!
+        **4. Map the Data**
+        Select the correct columns (ID, Diagnosis, etc.).
+        
+        **5. Run Analysis**
+        Click **🚀 Secure Run** to generate reports.
         """)
     
     st.divider()
     st.header("⚙️ Configuration")
     
-    # --- 2. API KEYS SECTION ---
-    st.subheader("🔑 API Access")
-    st.markdown("To ensure unlimited usage, please use your own **Free** Google Gemini Keys.")
+    # --- API KEY INPUT ---
+    st.subheader("🔑 Google API Access")
+    st.markdown("Use your **Personal/Free** keys for testing.")
     
     c1, c2 = st.columns(2)
     with c1:
@@ -62,7 +57,8 @@ with st.sidebar:
     
     st.divider()
     
-    # --- 3. STANDARDIZED SELECTIONS ---
+    # --- DEPARTMENT & DATE SELECTION ---
+    # Locked list as requested
     dept_options = ["ICU", "CCU", "PICU", "Inpatient Ward", "ER"]
     dept_name = st.selectbox("Department Name", options=dept_options)
     
@@ -71,19 +67,34 @@ with st.sidebar:
     with col_y: sel_year = st.selectbox("Year", [str(y) for y in range(2024, 2030)])
     data_month = f"{sel_month} {sel_year}"
     
+    # --- API QUOTA TRACKER ---
     st.divider()
     if 'api_calls' not in st.session_state: st.session_state['api_calls'] = 0
     quota_placeholder = st.empty()
     quota_placeholder.metric("API Calls This Session", st.session_state['api_calls'])
     
-    # --- 4. RESET BUTTON ---
+    # --- RESET BUTTON ---
     st.divider()
     if st.button("🔄 Reset App State", use_container_width=True):
         st.rerun()
 
-# ==========================================
-# HELPER FUNCTIONS
-# ==========================================
+# ========================================================
+# 3. HELPER FUNCTIONS: SECURITY & AI
+# ========================================================
+
+# --- SECURITY: ID HASHING ---
+def hash_patient_id(raw_id, salt="TEST_SALT_2026"):
+    """
+    Converts '12345' -> 'a7x9...' using SHA256. 
+    This ensures Real IDs are never sent to the AI.
+    """
+    raw_str = str(raw_id).strip()
+    if not raw_str or raw_str.lower() == 'nan':
+        return "UNKNOWN"
+    secure_string = raw_str + salt
+    return hashlib.sha256(secure_string.encode()).hexdigest()[:12]
+
+# --- TEXT PARSING ---
 def extract_json_from_text(text):
     try:
         start = text.find('{')
@@ -92,6 +103,7 @@ def extract_json_from_text(text):
         return json.loads(text[start:end])
     except: return None
 
+# --- AI MAPPING ENGINE ---
 def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     mapping_dict = {}
     batch_size = 400 
@@ -135,6 +147,7 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
             except Exception as e:
                 err = str(e)
                 if "429" in err or "Quota" in err:
+                    # Rotate keys logic
                     if len(keys_list) > 1:
                         current_key_idx = (current_key_idx + 1) % len(keys_list)
                         st.toast(f"Quota hit. Rotating Key...", icon="🔄")
@@ -142,18 +155,16 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
                         model = genai.GenerativeModel(models_to_try[current_model_idx])
                         time.sleep(1)
                         continue
-                    
+                    # Downgrade model logic
                     if current_model_idx < len(models_to_try) - 1:
                         current_model_idx += 1
                         st.warning(f"Quota hit. Downgrading to {models_to_try[current_model_idx]}...")
                         model = genai.GenerativeModel(models_to_try[current_model_idx])
                         time.sleep(1)
                         continue
-                    
-                    st.error("❌ **QUOTA FAILURE** Daily limit reached. Wait 24h or add new keys.")
+                    st.error("❌ **QUOTA FAILURE** Daily limit reached. Wait 24h or add new key.")
                     st.stop()
                 else:
-                    print(f"Batch Error: {e}") 
                     time.sleep(1)
         
         if success:
@@ -163,16 +174,25 @@ def get_icd_mapping_optimized(keys_list, unique_diagnoses):
     pbar.empty()
     return mapping_dict
 
+# ========================================================
+# 4. HELPER FUNCTIONS: REPORTING & FILES
+# ========================================================
+
 def update_master_history(current_stats, dept, month, old_hist=None):
     current_stats['Department'] = dept
     current_stats['Month'] = month
     if old_hist is not None and not old_hist.empty:
+        # Remove old entry for this month/dept to avoid duplicates
         old_hist = old_hist[~((old_hist['Department'] == dept) & (old_hist['Month'] == month))]
         return pd.concat([old_hist, current_stats], ignore_index=True)
     return current_stats
 
-# --- NEW FUNCTION: PARSES MARKDOWN TO CLEAN DOCX ---
+# --- RICH FORMATTER (MARKDOWN TO WORD) ---
 def write_markdown_to_docx(doc, text):
+    """
+    Parses Markdown text and applies real Word formatting.
+    Handles Headings (#) and Bold (**text**).
+    """
     lines = text.split('\n')
     for line in lines:
         line = line.strip()
@@ -181,10 +201,9 @@ def write_markdown_to_docx(doc, text):
             
         # 1. Handle Headings (e.g. ## Title)
         if line.startswith('#'):
-            level = min(line.count('#'), 3) # Max heading level 3
-            clean_text = line.lstrip('#').strip()
-            # Clean bold syntax from headings
-            clean_text = clean_text.replace('**', '').replace('__', '')
+            level = min(line.count('#'), 3)
+            # Remove hash and bold markers from heading text
+            clean_text = line.lstrip('#').strip().replace('**', '').replace('__', '')
             doc.add_heading(clean_text, level=level)
             
         # 2. Handle Lists (e.g. * Item or - Item)
@@ -230,9 +249,8 @@ def generate_report(history_df, month, dept, keys):
     **Dataset (CSV):**
     {dept_hist.to_csv(index=False)}
     
-    **Instructions for Output:**
-    - Do NOT use code blocks.
-    - Use standard Markdown formatting: # for headings, ** for bold, - for bullets.
+    **Instructions:**
+    - Use Markdown formatting (# Heading, **Bold**, * Bullet). NO code blocks.
     
     **Report Structure:**
     1. **Executive Summary** (Business & Clinical)
@@ -246,10 +264,7 @@ def generate_report(history_df, month, dept, keys):
         response = model.generate_content(prompt)
         doc = Document()
         doc.add_heading(f'Strategic Report: {dept} - {month}', 0)
-        
-        # --- USE THE CLEANER FUNCTION ---
         write_markdown_to_docx(doc, response.text)
-        
         b = BytesIO()
         doc.save(b)
         b.seek(0)
@@ -257,22 +272,22 @@ def generate_report(history_df, month, dept, keys):
     except Exception as e: 
         return None, str(e)
 
-# ==========================================
-# MAIN APP - WORKFLOW ENFORCEMENT
-# ==========================================
+# ========================================================
+# 5. MAIN APPLICATION LOGIC
+# ========================================================
 
+# Initialize Session State
 if 'analysis_done' not in st.session_state:
     st.session_state['analysis_done'] = False
 if 'zip_buffer' not in st.session_state:
     st.session_state['zip_buffer'] = None
-if 'history_filename' not in st.session_state:
-    st.session_state['history_filename'] = "master_history.csv"
+if 'zip_filename' not in st.session_state:
+    st.session_state['zip_filename'] = "analysis.zip"
 
-# STEP 1: MANDATORY HISTORY LOAD
+# --- STEP 1: HISTORY INITIALIZATION ---
 st.subheader("1. Initialize History (Mandatory)")
-st.info("To maintain trends, please upload your previous history file (e.g., `Jan_2026-ICU-history.csv`).")
-
-history_mode = st.radio("Do you have a previous history file?", ["Yes, I have it", "No, this is Day 1 (Start Fresh)"], horizontal=True)
+st.info("Upload previous history file to maintain trends.")
+history_mode = st.radio("Do you have a previous history file?", ["Yes, I have it", "No (Start Fresh)"], horizontal=True)
 
 history_df = pd.DataFrame() 
 
@@ -282,17 +297,16 @@ if history_mode == "Yes, I have it":
         try:
             history_df = pd.read_csv(uploaded_history)
             st.success(f"✅ History Loaded! Contains {len(history_df)} records.")
-        except:
-            st.error("Invalid CSV file.")
+        except: st.error("Invalid CSV.")
     else:
-        st.warning("⚠️ You must upload the history file to proceed.")
+        st.warning("⚠️ Upload history to proceed.")
         st.stop()
 else:
     st.success("✅ Starting with a fresh history database.")
 
 st.divider()
 
-# STEP 2: DATA UPLOAD
+# --- STEP 2: DATA UPLOAD & MAPPING ---
 st.subheader("2. Upload Current Month Data")
 uploaded_file = st.file_uploader("Upload Raw Hospital Data (CSV/Excel)", type=['csv', 'xlsx'], key="data_up")
 
@@ -302,7 +316,7 @@ if uploaded_file and api_keys:
         st.dataframe(df.head(3))
         
         st.divider()
-        st.subheader("3. Map Columns & Run")
+        st.subheader("3. Map Columns & Secure Run")
         cols = list(df.columns)
         c1, c2, c3 = st.columns(3)
         col_id = c1.selectbox("Patient ID", cols, index=0)
@@ -311,11 +325,16 @@ if uploaded_file and api_keys:
         col_adm = c1.selectbox("Admission Date", cols, index=min(3, len(cols)-1))
         col_disch = c2.selectbox("Discharge Date", cols, index=min(4, len(cols)-1))
         
-        if st.button("🚀 Run Analysis & Update History", type="primary"):
-            with st.status("Processing...", expanded=True):
-                # CLEAN
-                st.write("🔧 Cleaning data...")
+        if st.button("🚀 Secure Run (Gemini)", type="primary"):
+            with st.status("Processing Securely...", expanded=True):
+                # 1. CLEAN & ANONYMIZE
+                st.write("🔒 Anonymizing Patient IDs (SHA-256)...")
                 wdf = df.rename(columns={col_id:'ID', col_diag:'DIAG', col_rev:'REV', col_adm:'ADM', col_disch:'DISCH'})
+                
+                # --- APPLY ENCRYPTION ---
+                wdf['Original_ID'] = wdf['ID'] 
+                wdf['ID'] = wdf['ID'].apply(hash_patient_id) 
+                
                 wdf = wdf.dropna(subset=['DIAG']) 
                 wdf['DIAG'] = wdf['DIAG'].astype(str) 
                 wdf = wdf[wdf['DIAG'].str.strip() != ''] 
@@ -324,8 +343,8 @@ if uploaded_file and api_keys:
                 wdf['LOS'] = (wdf['DISCH'] - wdf['ADM']).dt.days.fillna(0).clip(lower=0)
                 wdf['REV'] = pd.to_numeric(wdf['REV'], errors='coerce').fillna(0)
                 
-                # MAP
-                st.write(f"🧠 Mapping {len(wdf)} records...")
+                # 2. MAP
+                st.write(f"🧠 AI Mapping ({len(wdf)} records)...")
                 unique = wdf['DIAG'].unique().tolist()
                 mapping = get_icd_mapping_optimized(api_keys, unique)
                 
@@ -335,39 +354,38 @@ if uploaded_file and api_keys:
 
                 wdf['Level3'] = wdf['DIAG'].map(lambda x: mapping.get(x, {}).get("Level3", "Unmapped"))
                 
-                # STATS
+                # 3. STATS
                 stats = wdf.groupby('Level3').agg({'DIAG':'count', 'LOS':['mean','median'], 'REV':['mean','median']}).reset_index()
                 stats.columns = ['Diagnosis Group', 'Cases', 'Mean LOS', 'Median LOS', 'Mean Rev', 'Median Rev']
                 stats['Skew Status'] = stats.apply(lambda x: 'Skewed' if x['Mean LOS'] > (x['Median LOS']*1.5) else 'Normal', axis=1)
                 
-                # MERGE HISTORY
-                st.write("📜 Integrating with Master History...")
+                # 4. HISTORY
+                st.write("📜 Updating History...")
                 full_hist = update_master_history(stats, dept_name, data_month, history_df)
                 
-                # REPORT
+                # 5. REPORT
                 st.write("📝 Generating Strategic Report...")
                 report_doc, report_error = generate_report(full_hist, data_month, dept_name, api_keys)
                 
-                # FILE NAMING
+                # 6. PACKAGING & NAMING
                 safe_dept = dept_name.replace(" ", "_").replace("/", "-")
                 safe_month = data_month.replace(" ", "_")
                 
                 history_filename = f"{safe_month}-{safe_dept}-history.csv"
-                report_filename = f"Report_{safe_month}-{safe_dept}.docx"
-                audit_filename = f"Audit_{safe_month}-{safe_dept}.xlsx"
                 zip_filename = f"Hospital_Analysis_{safe_month}-{safe_dept}.zip"
                 
-                # ZIP CREATION
-                st.write("📦 Packaging Files...")
                 audit_buffer = BytesIO()
                 wdf.to_excel(audit_buffer, index=False)
                 
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w") as zf:
+                    # History (Mandatory)
                     zf.writestr(history_filename, full_hist.to_csv(index=False))
+                    # Report (Docx)
                     if report_doc:
-                        zf.writestr(report_filename, report_doc.getvalue())
-                    zf.writestr(audit_filename, audit_buffer.getvalue())
+                        zf.writestr(f"Report_{safe_month}-{safe_dept}.docx", report_doc.getvalue())
+                    # Audit (Excel)
+                    zf.writestr(f"Audit_Encrypted_{safe_month}-{safe_dept}.xlsx", audit_buffer.getvalue())
                     
                 zip_buffer.seek(0)
                 
@@ -382,11 +400,13 @@ if uploaded_file and api_keys:
     except Exception as e:
         st.error(f"Critical App Error: {e}")
 
-# RESULTS DISPLAY
+# ========================================================
+# 6. RESULTS & DOWNLOAD DISPLAY
+# ========================================================
 if st.session_state.get('analysis_done') and st.session_state.get('zip_buffer'):
     st.divider()
     st.subheader("✅ Results Ready")
-    st.warning("⬇️ **STEP 4: Download Your Files**")
+    st.warning("⬇️ **STEP 4: Download Files**")
     
     st.download_button(
         label="📦 DOWNLOAD ALL FILES (ZIP)",
